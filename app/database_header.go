@@ -2,7 +2,6 @@ package main
 
 import (
 	"encoding/binary"
-	"fmt"
 )
 
 type DatabaseHeader struct {
@@ -32,9 +31,6 @@ type DatabaseHeader struct {
 }
 
 func unmarshalDbHeader(data []byte) (DatabaseHeader, error) {
-	if len(data) != 100 {
-		return DatabaseHeader{}, fmt.Errorf("database header must be 100 bytes, got %d", len(data))
-	}
 
 	res := &DatabaseHeader{}
 	copy(res.HeaderString[:], data[0:16])

@@ -1,8 +1,6 @@
 package main
 
 import (
-	"bytes"
-	"encoding/binary"
 	"fmt"
 	"log"
 	"os"
@@ -36,33 +34,22 @@ func main() {
 			log.Fatal(err)
 		}
 
-		_ = databaseHeader
-
-		var pageSize uint16
-		// Offset	|Size	|Description
-		// 16		|2		|The database page size in bytes. Must be a power of two between 512 and 32768 inclusive, or the value 1 representing a page size of 65536.
-		if err := binary.Read(bytes.NewReader(header[16:18]), binary.BigEndian, &pageSize); err != nil {
-			fmt.Println("Failed to read integer:", err)
-			return
-		}
-
-		// Prepare to read page 1 (sqlite_schema root page)
-		page := make([]byte, pageSize-100)
-		databaseFile.Read(page) // Go back to start of file
-
-		btree, err := unmarshalBtree(page)
+		parsedPage, err := readPage(databaseFile, 1, int(databaseHeader.PageSize))
 
 		if err != nil {
 			fmt.Println(err)
 			return
 		}
 
-		fmt.Printf("database page size: %v", pageSize)
-		fmt.Printf("number of tables: %v\n", btree.Header.CellCount)
+		fmt.Printf("database page size: %v", databaseHeader.PageSize)
+		fmt.Printf("number of tables: %v\n", parsedPage.Header.CellCount)
 	case ".tables":
 
 		// structure
+
+		// ======== file ==========
 		// 100 bytes (database header)
+		// ======== page ===========
 		// 8 bytes (page header)
 		// subsequent byte (2 bytes for each pointers) where nPointers is in page header cellCount
 
@@ -79,105 +66,70 @@ func main() {
 			log.Fatal(err)
 		}
 
-		_, err = unmarshalDbHeader(header)
+		databaseHeader, err := unmarshalDbHeader(header)
 
 		if err != nil {
 			log.Fatal(err)
 		}
 
-		// Read page header (8 bytes for leaf page)
-		pageHeaderBuffer := make([]byte, 8)
-
-		databaseFile.Read(pageHeaderBuffer)
-
-		pageHeader, err := unmarshalSQliteSchemaPageHeader(pageHeaderBuffer)
+		parsedPage, err := readPage(databaseFile, 1, int(databaseHeader.PageSize))
 
 		if err != nil {
 			log.Fatal(err)
-		}
-
-		// Verify it's a leaf table page
-		if pageHeader.PageType != 0x0d {
-			log.Fatal("Not a leaf table page")
-		}
-
-		cellPointers := make([]uint16, pageHeader.CellCount)
-		cellPointerBuffer := make([]byte, pageHeader.CellCount*2) // 2 bytes per pointer
-		databaseFile.Read(cellPointerBuffer)
-
-		// Parse cell pointers
-		for i := 0; i < int(pageHeader.CellCount); i++ {
-			cellPointers[i] = binary.BigEndian.Uint16(cellPointerBuffer[i*2 : (i*2)+2])
 		}
 
 		var tablesNames []string
 
-		for _, pointer := range cellPointers {
-			cell := readCell(databaseFile, int(pointer))
-			if string(cell.Body[0]) == "table" {
-				tablesNames = append(tablesNames, string(cell.Body[2]))
+		for _, rows := range parsedPage.Rows {
+			if string(rows.Columns[0]) == "table" {
+				tablesNames = append(tablesNames, string(rows.Columns[2]))
 			}
 		}
 
 		fmt.Println(strings.Join(tablesNames, " "))
 
 	default:
-		fmt.Println("Unknown command", command)
-		os.Exit(1)
-	}
-}
 
-func readCell(file *os.File, offset int) Cell {
-
-	varintBytes := make([]byte, 8)
-
-	if _, err := file.ReadAt(varintBytes, int64(offset)); err != nil {
-		log.Fatal(err)
-	}
-
-	// Size of the record
-	rowLength, size := parseVarIntBtes(varintBytes)
-
-	offset += size
-
-	buff := make([]byte, rowLength-uint64(size))
-
-	if _, err := file.ReadAt(buff, int64(offset)); err != nil {
-		log.Fatal(err)
-	}
-
-	offset = 0
-
-	// The rowid (safe to ignore)
-	rowID, size := parseVarIntBtes(buff[offset:])
-
-	offset += size
-
-	columnSizes, size := processCellHeader(buff[offset:])
-
-	offset += size
-
-	// var columnSizes []uint64
-
-	var body [][]byte
-
-	// table name is at index 2,
-	// put a break after index 2
-	for index, columnSize := range columnSizes {
-		body = append(body, buff[offset:offset+int(columnSize)])
-
-		if index == 2 {
-			break
+		databaseFile, err := os.Open(databaseFilePath)
+		if err != nil {
+			log.Fatal(err)
 		}
 
-		offset += int(columnSize)
-	}
+		command := strings.Split(command, " ")
+		tableName := command[len(command)-1]
 
-	return Cell{
-		Size:        rowLength,
-		RowID:       rowID,
-		HeaderSize:  uint64(size),
-		ColumnSizes: columnSizes,
-		Body:        body,
+		header := make([]byte, 100)
+
+		_, err = databaseFile.Read(header)
+
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		databaseHeader, err := unmarshalDbHeader(header)
+
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		firstPage, err := readPage(databaseFile, 1, int(databaseHeader.PageSize))
+
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		// rootPages := make(map[string]uint8)
+		for _, row := range firstPage.Rows {
+			if string(row.Columns[0]) == "table" && string(row.Columns[1]) == tableName {
+				targetPage, err := readPage(databaseFile, int(row.Columns[3][0]), int(databaseHeader.PageSize))
+
+				if err != nil {
+					log.Fatal(err)
+				}
+
+				fmt.Println(targetPage.Header.CellCount)
+				break
+			}
+		}
 	}
 }

@@ -34,7 +34,7 @@ func getContentSizeFromSerialType(serialType uint64) uint64 {
 	}
 }
 
-func processCellHeader(data []byte) ([]uint64, int) {
+func parseCellHeader(data []byte) ([]uint64, int) {
 	offset := 0
 
 	// Size of record header (varint) including it self:
