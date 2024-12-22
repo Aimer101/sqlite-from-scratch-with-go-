@@ -114,6 +114,12 @@ func handleQuery(queries string, databaseFile *os.File) {
 		tableName := sqlparser.String(parsedQuery.From[0])
 		selectExp := sqlparser.String(parsedQuery.SelectExprs[0])
 
+		var col_names []string
+
+		for _, col_name := range parsedQuery.SelectExprs {
+			col_names = append(col_names, sqlparser.String(col_name))
+		}
+
 		header := make([]byte, 100)
 
 		_, err := databaseFile.Read(header)
@@ -153,18 +159,33 @@ func handleQuery(queries string, databaseFile *os.File) {
 
 			for _, row := range firstPage.Rows {
 				if string(row.Columns[0]) == "table" && string(row.Columns[1]) == tableName {
-					columnIndex := getColumnIndex(string(row.Columns[4]), selectExp)
+					columnIndexes := getColumnIndex(string(row.Columns[4]), col_names)
 					targetPage, err := readPage(databaseFile, int(row.Columns[3][0]), int(databaseHeader.PageSize))
 
 					if err != nil {
 						log.Fatal(err)
 					}
 
-					for _, row := range targetPage.Rows {
-						fmt.Println(string(row.Columns[columnIndex]))
-					}
-				}
+					var col_results [][]string
 
+					for _, row := range targetPage.Rows {
+
+						var col_result []string
+
+						for _, index := range columnIndexes {
+							col_result = append(col_result, string(row.Columns[index]))
+							continue
+						}
+
+						col_results = append(col_results, col_result)
+					}
+
+					for _, col_result := range col_results {
+						result := strings.Join(col_result, "|")
+						fmt.Println(result)
+					}
+
+				}
 			}
 
 		}

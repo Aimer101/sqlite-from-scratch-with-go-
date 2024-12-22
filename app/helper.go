@@ -48,14 +48,21 @@ func getContentSizeFromSerialType(serialType uint64) uint64 {
 	}
 }
 
-func getColumnIndex(createStatement string, columnName string) int {
+func getColumnIndex(createStatement string, columnNames []string) []int {
 	re := regexp.MustCompile(`CREATE TABLE \w+\s*\(([^\)]+)\)`)
 	matches := re.FindStringSubmatch(createStatement)
 	columns := strings.Split(matches[1], ",")
-	for i, c := range columns {
-		if strings.Split(strings.TrimSpace(c), " ")[0] == columnName {
-			return i
+
+	var columnIndex []int
+
+	for _, columnName := range columnNames {
+		for i, c := range columns {
+			if strings.Split(strings.TrimSpace(c), " ")[0] == columnName {
+				columnIndex = append(columnIndex, i)
+				break
+			}
 		}
 	}
-	return -1
+
+	return columnIndex
 }
