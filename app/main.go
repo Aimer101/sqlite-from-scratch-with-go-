@@ -5,8 +5,9 @@ import (
 	"log"
 	"os"
 	"strings"
+
 	// Available if you need it!
-	// "github.com/xwb1989/sqlparser"
+	"github.com/xwb1989/sqlparser"
 )
 
 // Usage: your_program.sh sample.db .dbinfo
@@ -95,12 +96,27 @@ func main() {
 			log.Fatal(err)
 		}
 
-		command := strings.Split(command, " ")
-		tableName := command[len(command)-1]
+		handleQuery(command, databaseFile)
+
+	}
+}
+
+func handleQuery(queries string, databaseFile *os.File) {
+	parsedQuery, err := sqlparser.Parse(queries)
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	switch parsedQuery := parsedQuery.(type) {
+
+	case *sqlparser.Select:
+		tableName := sqlparser.String(parsedQuery.From[0])
+		selectExp := sqlparser.String(parsedQuery.SelectExprs[0])
 
 		header := make([]byte, 100)
 
-		_, err = databaseFile.Read(header)
+		_, err := databaseFile.Read(header)
 
 		if err != nil {
 			log.Fatal(err)
@@ -118,18 +134,40 @@ func main() {
 			log.Fatal(err)
 		}
 
-		// rootPages := make(map[string]uint8)
-		for _, row := range firstPage.Rows {
-			if string(row.Columns[0]) == "table" && string(row.Columns[1]) == tableName {
-				targetPage, err := readPage(databaseFile, int(row.Columns[3][0]), int(databaseHeader.PageSize))
+		if strings.Contains(strings.ToLower(selectExp), "count") {
 
-				if err != nil {
-					log.Fatal(err)
+			// rootPages := make(map[string]uint8)
+			for _, row := range firstPage.Rows {
+				if string(row.Columns[0]) == "table" && string(row.Columns[1]) == tableName {
+					targetPageHeader, err := peakPageHeader(databaseFile, int(row.Columns[3][0]), int(databaseHeader.PageSize))
+
+					if err != nil {
+						log.Fatal(err)
+					}
+
+					fmt.Println(targetPageHeader.CellCount)
+				}
+			}
+
+		} else {
+
+			for _, row := range firstPage.Rows {
+				if string(row.Columns[0]) == "table" && string(row.Columns[1]) == tableName {
+					columnIndex := getColumnIndex(string(row.Columns[4]), selectExp)
+					targetPage, err := readPage(databaseFile, int(row.Columns[3][0]), int(databaseHeader.PageSize))
+
+					if err != nil {
+						log.Fatal(err)
+					}
+
+					for _, row := range targetPage.Rows {
+						fmt.Println(string(row.Columns[columnIndex]))
+					}
 				}
 
-				fmt.Println(targetPage.Header.CellCount)
-				break
 			}
+
 		}
 	}
+
 }

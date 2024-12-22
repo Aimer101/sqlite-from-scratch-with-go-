@@ -1,20 +1,34 @@
 package main
 
-func parseVarIntBtes(data []byte) (uint64, int) {
+import (
+	"regexp"
+	"strings"
+)
+
+func decodeVarint(data *[]byte, offset int64) (uint64, int) {
 	var result uint64
+	var i int64
 
-	offset := 0
+	for {
+		currentByte := (*data)[offset+i]
 
-	for offset < len(data) {
-		currentByte := data[offset]
-		result |= uint64(currentByte&0x7F) << (8 * (offset))
-		offset++
-		if currentByte&0x80 == 0 {
+		if i == 8 {
+			result <<= 8
+			result |= uint64(currentByte)
+			break
+		} else {
+			result <<= 7
+		}
+
+		result |= uint64(currentByte & 0x7f)
+
+		if currentByte>>7 == 0 {
 			break
 		}
-	}
 
-	return result, offset
+		i++
+	}
+	return result, int(i + 1)
 }
 
 func getContentSizeFromSerialType(serialType uint64) uint64 {
@@ -34,29 +48,14 @@ func getContentSizeFromSerialType(serialType uint64) uint64 {
 	}
 }
 
-func parseCellHeader(data []byte) ([]uint64, int) {
-	offset := 0
-
-	// Size of record header (varint) including it self:
-	// any byte that comes after offset + headerLength is the actual content
-	headerLength, size := parseVarIntBtes(data[offset:])
-
-	offset += size
-
-	var columnSizes []uint64
-
-	for offset < int(headerLength) {
-		// 1. get serial type
-		columnType, size := parseVarIntBtes(data[offset:])
-
-		// 2. get size
-		columnSize := getContentSizeFromSerialType(columnType)
-
-		columnSizes = append(columnSizes, columnSize)
-
-		offset += size
+func getColumnIndex(createStatement string, columnName string) int {
+	re := regexp.MustCompile(`CREATE TABLE \w+\s*\(([^\)]+)\)`)
+	matches := re.FindStringSubmatch(createStatement)
+	columns := strings.Split(matches[1], ",")
+	for i, c := range columns {
+		if strings.Split(strings.TrimSpace(c), " ")[0] == columnName {
+			return i
+		}
 	}
-
-	return columnSizes, int(headerLength)
-
+	return -1
 }

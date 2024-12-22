@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/binary"
 	"fmt"
-	"log"
 	"os"
 )
 
@@ -68,9 +67,38 @@ func parsePointers(data []byte) []uint16 {
 
 }
 
+func peakPageHeader(file *os.File, pageNumber int, pageSize int) (PageHeader, error) {
+	buff := make([]byte, pageSize)
+
+	readerOffset := pageSize * (pageNumber - 1)
+
+	_, err := file.ReadAt(buff, int64(readerOffset))
+
+	if err != nil {
+		return PageHeader{}, err
+	}
+
+	offset := 0
+
+	if pageNumber == 1 {
+		offset = 100
+	}
+
+	header, err := unmarshalPageHeader(buff[offset : offset+8])
+
+	if err != nil {
+		return PageHeader{}, err
+	}
+
+	return header, nil
+
+}
+
 func readPage(file *os.File, pageNumber int, pageSize int) (Page, error) {
 	// info, _ := file.Stat() // Size in bytes
 	// fmt.Printf("The size of the file is %d bytes.\n", info.Size())
+	// fmt.Println("target page index is ", pageNumber)
+	// fmt.Println("page size is ", pageSize)
 
 	buff := make([]byte, pageSize)
 
@@ -89,9 +117,7 @@ func readPage(file *os.File, pageNumber int, pageSize int) (Page, error) {
 	}
 
 	header, err := unmarshalPageHeader(buff[offset : offset+8])
-	if pageNumber != 1 {
-		fmt.Println(header.CellCount)
-	}
+
 	offset += 8
 
 	if err != nil {
@@ -106,60 +132,48 @@ func readPage(file *os.File, pageNumber int, pageSize int) (Page, error) {
 	var cells []Cell
 
 	for _, pointer := range pointers {
-		cell := readCell(file, int(pointer))
+		cell := readCell(buff, int(pointer))
 		cells = append(cells, cell)
 	}
 
 	return Page{Header: header, Rows: cells}, nil
 }
 
-func readCell(file *os.File, readerOffset int) Cell {
+func readCell(data []byte, offset int) Cell {
 
-	varintBytes := make([]byte, 8)
-
-	if _, err := file.ReadAt(varintBytes, int64(readerOffset)); err != nil {
-		log.Fatal(err)
-	}
-
-	// Size of the record
-	rowLength, size := parseVarIntBtes(varintBytes)
-
-	readerOffset += size
-
-	buff := make([]byte, rowLength-uint64(size))
-
-	if _, err := file.ReadAt(buff, int64(readerOffset)); err != nil {
-		log.Fatal(err)
-	}
-
-	offset := 0
-
-	// The rowid (safe to ignore)
-	rowID, size := parseVarIntBtes(buff[offset:])
+	rowLength, size := decodeVarint(&data, int64(offset))
 
 	offset += size
 
-	columnSizes, size := parseCellHeader(buff[offset:])
+	rowID, size := decodeVarint(&data, int64(offset))
 
 	offset += size
 
-	var body [][]byte
+	headerLength, size := decodeVarint(&data, int64(offset))
+	headerByteEnd := offset + int(headerLength)
+	offset += size
 
-	for index, columnSize := range columnSizes {
-		body = append(body, buff[offset:offset+int(columnSize)])
+	var columnSizes []uint64
 
-		if index == 3 {
-			break
-		}
+	for offset < headerByteEnd {
+		serialType, bytesRead := decodeVarint(&data, int64(offset))
+		columnSize := getContentSizeFromSerialType(serialType)
+		columnSizes = append(columnSizes, columnSize)
+		offset += bytesRead
+	}
 
+	var columns [][]byte
+
+	for _, columnSize := range columnSizes {
+		content := data[offset : offset+int(columnSize)]
+		columns = append(columns, content)
 		offset += int(columnSize)
 	}
 
 	return Cell{
-		Size:        rowLength,
-		RowID:       rowID,
-		HeaderSize:  uint64(size),
-		ColumnSizes: columnSizes,
-		Columns:     body,
+		Size:       rowLength,
+		RowID:      rowID,
+		HeaderSize: uint64(size),
+		Columns:    columns,
 	}
 }
