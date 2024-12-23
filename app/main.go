@@ -113,6 +113,13 @@ func handleQuery(queries string, databaseFile *os.File) {
 	case *sqlparser.Select:
 		tableName := sqlparser.String(parsedQuery.From[0])
 		selectExp := sqlparser.String(parsedQuery.SelectExprs[0])
+		whereStatement := sqlparser.String(parsedQuery.Where)
+		var whereExp []string
+
+		if whereStatement != "" {
+			whereStatement = sqlparser.String(parsedQuery.Where.Expr)
+			whereExp = parseWhereStatement(whereStatement)
+		}
 
 		var col_names []string
 
@@ -142,7 +149,6 @@ func handleQuery(queries string, databaseFile *os.File) {
 
 		if strings.Contains(strings.ToLower(selectExp), "count") {
 
-			// rootPages := make(map[string]uint8)
 			for _, row := range firstPage.Rows {
 				if string(row.Columns[0]) == "table" && string(row.Columns[1]) == tableName {
 					targetPageHeader, err := peakPageHeader(databaseFile, int(row.Columns[3][0]), int(databaseHeader.PageSize))
@@ -166,9 +172,20 @@ func handleQuery(queries string, databaseFile *os.File) {
 						log.Fatal(err)
 					}
 
+					filter_col_index := -1
+
+					if whereStatement != "" {
+						filter_col_index = getColumnIndex(string(row.Columns[4]), []string{whereExp[0]})[0]
+
+					}
+
 					var col_results [][]string
 
 					for _, row := range targetPage.Rows {
+
+						if filter_col_index != -1 && string(row.Columns[filter_col_index]) != whereExp[1] {
+							continue
+						}
 
 						var col_result []string
 

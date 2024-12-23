@@ -66,3 +66,12 @@ func getColumnIndex(createStatement string, columnNames []string) []int {
 
 	return columnIndex
 }
+
+func parseWhereStatement(whereStatement string) []string {
+	result := strings.Split(whereStatement, "=")
+	result[1] = strings.ReplaceAll(result[1], "'", "")
+	result[1] = strings.ReplaceAll(result[1], " ", "")
+	result[0] = strings.ReplaceAll(result[0], " ", "")
+
+	return result
+}
