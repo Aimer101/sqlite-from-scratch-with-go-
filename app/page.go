@@ -20,7 +20,7 @@ type PageHeader struct {
 	CellCount           uint16
 	CellContentPointer  uint16 // The two-byte integer at offset 5 designates the start of the cell content area. A zero value for this integer is interpreted as 65536.
 	FragmantedFreeBytes uint8  // The one-byte integer at offset 7 gives the number of fragmented free bytes within the cell content area.
-	// RightmostPointer    uint32 // The four-byte page number at offset 8 is the right-most pointer. This value appears in the header of interior b-tree pages only and is omitted from all other pages.
+	RightmostPointer    uint32 // The four-byte page number at offset 8 is the right-most pointer. This value appears in the header of interior b-tree pages only and is omitted from all other pages.
 }
 
 func unmarshalPageHeader(data []byte) (PageHeader, error) {
@@ -35,23 +35,31 @@ func unmarshalPageHeader(data []byte) (PageHeader, error) {
 	res.CellCount = binary.BigEndian.Uint16(data[3:5])
 	res.CellContentPointer = binary.BigEndian.Uint16(data[5:7]) // The two-byte integer at offset 5 designates the start of the cell content area. A zero value for this integer is interpreted as 65536.
 	res.FragmantedFreeBytes = data[7]
-	// res.RightmostPointer = binary.BigEndian.Uint32(data[8:12])
 
 	return *res, nil
-
 }
 
 type Page struct {
 	Header PageHeader
-	Rows   []Cell
+	Rows   []LeafPageCell
 }
 
-type Cell struct {
+type LeafPageCell struct {
 	Size        uint64
 	RowID       uint64
 	HeaderSize  uint64
 	ColumnSizes []uint64
 	Columns     [][]byte
+}
+
+type InteriorPageCell struct {
+	LeftChildPageNumber uint32
+	IntegerKey          uint64
+}
+
+type InteriorCell struct {
+	ChildPageNum uint32 // 4-byte pointer to child page
+	RowID        uint64 // varint rowid that acts as key
 }
 
 func parsePointers(data []byte) []uint16 {
@@ -116,30 +124,81 @@ func readPage(file *os.File, pageNumber int, pageSize int) (Page, error) {
 		offset = 100
 	}
 
+	// The b-tree page header is 8 bytes in size for leaf pages and 12 bytes for interior pages.
+	// A value of 2 (0x02) means the page is an interior index b-tree page.
+	// A value of 5 (0x05) means the page is an interior table b-tree page.
+	// A value of 10 (0x0a) means the page is a leaf index b-tree page.
+	// A value of 13 (0x0d) means the page is a leaf table b-tree page.
+
 	header, err := unmarshalPageHeader(buff[offset : offset+8])
 
 	offset += 8
+
+	if header.PageType == 0x05 {
+		header.RightmostPointer = binary.BigEndian.Uint32(buff[offset : offset+4])
+		offset += 4
+
+	}
 
 	if err != nil {
 		return Page{}, err
 	}
 
-	// parse pointers
+	result := Page{Header: header}
 	pointersBuff := buff[offset : offset+int(header.CellCount*2)]
-
 	pointers := parsePointers(pointersBuff)
+	var leafPageCells []LeafPageCell
 
-	var cells []Cell
+	// interior page
+	if header.RightmostPointer != 0 {
+		var interiorPageCells []InteriorPageCell
+		for _, pointer := range pointers {
 
-	for _, pointer := range pointers {
-		cell := readCell(buff, int(pointer))
-		cells = append(cells, cell)
+			cell := readInteriorPageCell(buff, int(pointer))
+			interiorPageCells = append(interiorPageCells, cell)
+		}
+
+		var parsedPages []Page
+
+		for _, interiorPageCell := range interiorPageCells {
+			parsedPage, _ := readPage(file, int(interiorPageCell.LeftChildPageNumber), pageSize)
+			parsedPages = append(parsedPages, parsedPage)
+		}
+
+		rightMostPage, _ := readPage(file, int(header.RightmostPointer), pageSize)
+		parsedPages = append(parsedPages, rightMostPage)
+
+		for _, parsedPage := range parsedPages {
+			leafPageCells = append(leafPageCells, parsedPage.Rows...)
+		}
+
+	} else {
+		for _, pointer := range pointers {
+			cell := readLeafPageCell(buff, int(pointer))
+			leafPageCells = append(leafPageCells, cell)
+		}
 	}
 
-	return Page{Header: header, Rows: cells}, nil
+	result.Rows = leafPageCells
+
+	return result, nil
 }
 
-func readCell(data []byte, offset int) Cell {
+func readInteriorPageCell(data []byte, offset int) InteriorPageCell {
+
+	leftChildPageNumber := binary.BigEndian.Uint32(data[offset : offset+4])
+
+	offset += 4
+
+	integerKey, _ := decodeVarint(&data, int64(offset))
+
+	return InteriorPageCell{
+		LeftChildPageNumber: leftChildPageNumber,
+		IntegerKey:          integerKey,
+	}
+}
+
+func readLeafPageCell(data []byte, offset int) LeafPageCell {
 
 	rowLength, size := decodeVarint(&data, int64(offset))
 
@@ -170,7 +229,7 @@ func readCell(data []byte, offset int) Cell {
 		offset += int(columnSize)
 	}
 
-	return Cell{
+	return LeafPageCell{
 		Size:       rowLength,
 		RowID:      rowID,
 		HeaderSize: uint64(size),

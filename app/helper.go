@@ -49,8 +49,10 @@ func getContentSizeFromSerialType(serialType uint64) uint64 {
 }
 
 func getColumnIndex(createStatement string, columnNames []string) []int {
-	re := regexp.MustCompile(`CREATE TABLE \w+\s*\(([^\)]+)\)`)
+	// re := regexp.MustCompile(`CREATE TABLE \w+\s*\(([^\)]+)\)`)
+	re := regexp.MustCompile(`CREATE TABLE ["']?\w+["']?\s*\(([^\)]+)\)`)
 	matches := re.FindStringSubmatch(createStatement)
+
 	columns := strings.Split(matches[1], ",")
 
 	var columnIndex []int
@@ -70,7 +72,7 @@ func getColumnIndex(createStatement string, columnNames []string) []int {
 func parseWhereStatement(whereStatement string) []string {
 	result := strings.Split(whereStatement, "=")
 	result[1] = strings.ReplaceAll(result[1], "'", "")
-	result[1] = strings.ReplaceAll(result[1], " ", "")
+	result[1] = strings.Trim(result[1], " ")
 	result[0] = strings.ReplaceAll(result[0], " ", "")
 
 	return result

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strconv"
 	"strings"
 
 	// Available if you need it!
@@ -114,7 +115,7 @@ func handleQuery(queries string, databaseFile *os.File) {
 		tableName := sqlparser.String(parsedQuery.From[0])
 		selectExp := sqlparser.String(parsedQuery.SelectExprs[0])
 		whereStatement := sqlparser.String(parsedQuery.Where)
-		var whereExp []string
+		var whereExp []string // 0 is for col_name, 1 is for value
 
 		if whereStatement != "" {
 			whereStatement = sqlparser.String(parsedQuery.Where.Expr)
@@ -141,7 +142,7 @@ func handleQuery(queries string, databaseFile *os.File) {
 			log.Fatal(err)
 		}
 
-		firstPage, err := readPage(databaseFile, 1, int(databaseHeader.PageSize))
+		rootPage, err := readPage(databaseFile, 1, int(databaseHeader.PageSize))
 
 		if err != nil {
 			log.Fatal(err)
@@ -149,7 +150,7 @@ func handleQuery(queries string, databaseFile *os.File) {
 
 		if strings.Contains(strings.ToLower(selectExp), "count") {
 
-			for _, row := range firstPage.Rows {
+			for _, row := range rootPage.Rows {
 				if string(row.Columns[0]) == "table" && string(row.Columns[1]) == tableName {
 					targetPageHeader, err := peakPageHeader(databaseFile, int(row.Columns[3][0]), int(databaseHeader.PageSize))
 
@@ -163,9 +164,11 @@ func handleQuery(queries string, databaseFile *os.File) {
 
 		} else {
 
-			for _, row := range firstPage.Rows {
+			for _, row := range rootPage.Rows {
 				if string(row.Columns[0]) == "table" && string(row.Columns[1]) == tableName {
+
 					columnIndexes := getColumnIndex(string(row.Columns[4]), col_names)
+
 					targetPage, err := readPage(databaseFile, int(row.Columns[3][0]), int(databaseHeader.PageSize))
 
 					if err != nil {
@@ -176,27 +179,30 @@ func handleQuery(queries string, databaseFile *os.File) {
 
 					if whereStatement != "" {
 						filter_col_index = getColumnIndex(string(row.Columns[4]), []string{whereExp[0]})[0]
-
 					}
 
 					var col_results [][]string
 
-					for _, row := range targetPage.Rows {
+					for _, targetPageRow := range targetPage.Rows {
 
-						if filter_col_index != -1 && string(row.Columns[filter_col_index]) != whereExp[1] {
+						if filter_col_index != -1 && string(targetPageRow.Columns[filter_col_index]) != whereExp[1] {
 							continue
 						}
 
 						var col_result []string
 
 						for _, index := range columnIndexes {
-							col_result = append(col_result, string(row.Columns[index]))
-							continue
+							if index == 0 {
+								col_result = append(col_result, strconv.Itoa(int(targetPageRow.RowID)))
+								continue
+							}
+							col_result = append(col_result, string(targetPageRow.Columns[index]))
 						}
 
 						col_results = append(col_results, col_result)
 					}
 
+					// handle select statement
 					for _, col_result := range col_results {
 						result := strings.Join(col_result, "|")
 						fmt.Println(result)
