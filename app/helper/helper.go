@@ -1,11 +1,45 @@
-package main
+package helper
 
 import (
 	"regexp"
 	"strings"
 )
 
-func decodeVarint(data *[]byte, offset int64) (uint64, int) {
+func ArrayContain[T comparable](target T, elements []T) bool {
+
+	for _, element := range elements {
+		if element == target {
+			return true
+		}
+	}
+
+	return false
+}
+
+func DecodeTwosCompliment(bytes []byte) int64 {
+	size := len(bytes)
+	if size > 8 {
+		panic("Max 8 bytes allowed")
+	}
+	var result int64
+	var mask int64
+	for i := 0; i < size; i++ {
+		shift := 8 * (size - i - 1)
+		// Combine bytes
+		result |= int64(bytes[i]) << shift
+		// 11111111 = 255
+		mask |= 255 << shift
+	}
+
+	// 10000000 = 128
+	if bytes[0]&128 == 1 {
+		flippedMask := ^mask
+		result |= flippedMask
+	}
+	return result
+}
+
+func DecodeVarint(data *[]byte, offset int64) (uint64, int) {
 	var result uint64
 	var i int64
 
@@ -31,7 +65,7 @@ func decodeVarint(data *[]byte, offset int64) (uint64, int) {
 	return result, int(i + 1)
 }
 
-func getContentSizeFromSerialType(serialType uint64) uint64 {
+func GetContentSizeFromSerialType(serialType uint64) uint64 {
 	switch {
 	case serialType <= 4:
 		return serialType
@@ -48,7 +82,17 @@ func getContentSizeFromSerialType(serialType uint64) uint64 {
 	}
 }
 
-func getColumnIndex(createStatement string, columnNames []string) []int {
+func ParseCreateIndexStatement(indexStatement string) []string {
+	var result []string
+	re := regexp.MustCompile(`(?i)CREATE INDEX \"?\w+\"?\s*ON\s+(\w+)\s+\((\w+)\)`)
+	matches := re.FindStringSubmatch(indexStatement)
+	columns := strings.Split(matches[2], ",")
+	result = append(result, columns...)
+
+	return result
+}
+
+func GetTableColumnIndex(createStatement string, columnNames []string) []int {
 	// re := regexp.MustCompile(`CREATE TABLE \w+\s*\(([^\)]+)\)`)
 	re := regexp.MustCompile(`CREATE TABLE ["']?\w+["']?\s*\(([^\)]+)\)`)
 	matches := re.FindStringSubmatch(createStatement)
@@ -69,7 +113,7 @@ func getColumnIndex(createStatement string, columnNames []string) []int {
 	return columnIndex
 }
 
-func parseWhereStatement(whereStatement string) []string {
+func ParseWhereStatement(whereStatement string) []string {
 	result := strings.Split(whereStatement, "=")
 	result[1] = strings.ReplaceAll(result[1], "'", "")
 	result[1] = strings.Trim(result[1], " ")

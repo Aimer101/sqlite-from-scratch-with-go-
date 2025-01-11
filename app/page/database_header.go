@@ -1,4 +1,4 @@
-package main
+package page
 
 import (
 	"encoding/binary"
@@ -30,7 +30,7 @@ type DatabaseHeader struct {
 	SQLiteVersionNumber    uint32
 }
 
-func unmarshalDbHeader(data []byte) (DatabaseHeader, error) {
+func UnmarshalDbHeader(data []byte) (DatabaseHeader, error) {
 
 	res := &DatabaseHeader{}
 	copy(res.HeaderString[:], data[0:16])

@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	helper "github/com/codecrafters-io/sqlite-starter-go/app/helper"
+	"github/com/codecrafters-io/sqlite-starter-go/app/page"
 	"log"
 	"os"
 	"strconv"
@@ -30,13 +32,13 @@ func main() {
 			log.Fatal(err)
 		}
 
-		databaseHeader, err := unmarshalDbHeader(header)
+		databaseHeader, err := page.UnmarshalDbHeader(header)
 
 		if err != nil {
 			log.Fatal(err)
 		}
 
-		parsedPage, err := readPage(databaseFile, 1, int(databaseHeader.PageSize))
+		pageHeader, err := page.PeakPageHeader(databaseFile, 1, int(databaseHeader.PageSize))
 
 		if err != nil {
 			fmt.Println(err)
@@ -44,7 +46,7 @@ func main() {
 		}
 
 		fmt.Printf("database page size: %v", databaseHeader.PageSize)
-		fmt.Printf("number of tables: %v\n", parsedPage.Header.CellCount)
+		fmt.Printf("number of tables: %v\n", pageHeader.CellCount)
 	case ".tables":
 
 		// structure
@@ -68,13 +70,13 @@ func main() {
 			log.Fatal(err)
 		}
 
-		databaseHeader, err := unmarshalDbHeader(header)
+		databaseHeader, err := page.UnmarshalDbHeader(header)
 
 		if err != nil {
 			log.Fatal(err)
 		}
 
-		parsedPage, err := readPage(databaseFile, 1, int(databaseHeader.PageSize))
+		rootPageCells := page.ReadFullTree(databaseFile, 1, int(databaseHeader.PageSize))
 
 		if err != nil {
 			log.Fatal(err)
@@ -82,9 +84,12 @@ func main() {
 
 		var tablesNames []string
 
-		for _, rows := range parsedPage.Rows {
-			if string(rows.Columns[0]) == "table" {
-				tablesNames = append(tablesNames, string(rows.Columns[2]))
+		for _, row := range rootPageCells {
+
+			pointer := page.UnmarshalRootPagePointer(row.Columns)
+
+			if pointer.PageType == "table" {
+				tablesNames = append(tablesNames, pointer.TableName)
 			}
 		}
 
@@ -119,7 +124,7 @@ func handleQuery(queries string, databaseFile *os.File) {
 
 		if whereStatement != "" {
 			whereStatement = sqlparser.String(parsedQuery.Where.Expr)
-			whereExp = parseWhereStatement(whereStatement)
+			whereExp = helper.ParseWhereStatement(whereStatement)
 		}
 
 		var col_names []string
@@ -136,23 +141,19 @@ func handleQuery(queries string, databaseFile *os.File) {
 			log.Fatal(err)
 		}
 
-		databaseHeader, err := unmarshalDbHeader(header)
+		databaseHeader, err := page.UnmarshalDbHeader(header)
 
 		if err != nil {
 			log.Fatal(err)
 		}
 
-		rootPage, err := readPage(databaseFile, 1, int(databaseHeader.PageSize))
-
-		if err != nil {
-			log.Fatal(err)
-		}
+		rootPageCells := page.ReadFullTree(databaseFile, 1, int(databaseHeader.PageSize))
 
 		if strings.Contains(strings.ToLower(selectExp), "count") {
 
-			for _, row := range rootPage.Rows {
+			for _, row := range rootPageCells {
 				if string(row.Columns[0]) == "table" && string(row.Columns[1]) == tableName {
-					targetPageHeader, err := peakPageHeader(databaseFile, int(row.Columns[3][0]), int(databaseHeader.PageSize))
+					targetPageHeader, err := page.PeakPageHeader(databaseFile, int(row.Columns[3][0]), int(databaseHeader.PageSize))
 
 					if err != nil {
 						log.Fatal(err)
@@ -163,52 +164,88 @@ func handleQuery(queries string, databaseFile *os.File) {
 			}
 
 		} else {
+			rootPagePointers := make(map[string]page.RootPagePointer)
 
-			for _, row := range rootPage.Rows {
-				if string(row.Columns[0]) == "table" && string(row.Columns[1]) == tableName {
-
-					columnIndexes := getColumnIndex(string(row.Columns[4]), col_names)
-
-					targetPage, err := readPage(databaseFile, int(row.Columns[3][0]), int(databaseHeader.PageSize))
-
-					if err != nil {
-						log.Fatal(err)
-					}
-
-					filter_col_index := -1
-
-					if whereStatement != "" {
-						filter_col_index = getColumnIndex(string(row.Columns[4]), []string{whereExp[0]})[0]
-					}
-
-					var col_results [][]string
-
-					for _, targetPageRow := range targetPage.Rows {
-
-						if filter_col_index != -1 && string(targetPageRow.Columns[filter_col_index]) != whereExp[1] {
-							continue
-						}
-
-						var col_result []string
-
-						for _, index := range columnIndexes {
-							if index == 0 {
-								col_result = append(col_result, strconv.Itoa(int(targetPageRow.RowID)))
-								continue
-							}
-							col_result = append(col_result, string(targetPageRow.Columns[index]))
-						}
-
-						col_results = append(col_results, col_result)
-					}
-
-					// handle select statement
-					for _, col_result := range col_results {
-						result := strings.Join(col_result, "|")
-						fmt.Println(result)
-					}
-
+			for _, cell := range rootPageCells {
+				if string(cell.Columns[2]) != tableName {
+					continue
 				}
+				// 0 is for type
+				// 1 is for name of object created
+				// 2 is name of table
+				// 3 is for page number
+				// 4 is for create statement
+				var values [][]byte
+				values = append(values, cell.Columns...)
+
+				name := string(values[0]) + "-" + string(values[2])
+
+				firstPagePointer := page.UnmarshalRootPagePointer(cell.Columns)
+
+				rootPagePointers[name] = firstPagePointer
+			}
+
+			table := "table-" + tableName
+			index := "index-" + tableName
+
+			var results []page.Cell
+
+			if _, ok := rootPagePointers[index]; ok {
+				pointer := rootPagePointers[index]
+				parsedCreateIndexStatemet := helper.ParseCreateIndexStatement(pointer.CreateStatement)
+
+				if helper.ArrayContain(whereExp[0], parsedCreateIndexStatemet) {
+					indexPageNum := uint32(rootPagePointers[index].PageNumber)
+					tablePageNum := uint32(rootPagePointers[table].PageNumber)
+
+					var ids []int64
+
+					page.ReadIndex(databaseFile, int(indexPageNum), int(databaseHeader.PageSize), whereExp, &ids)
+
+					results = page.ReadTree(databaseFile, int(tablePageNum), int(databaseHeader.PageSize), &ids)
+				}
+
+			} else {
+				tablePageNum := uint32(rootPagePointers[table].PageNumber)
+
+				results = page.ReadFullTree(databaseFile, int(tablePageNum), int(databaseHeader.PageSize))
+			}
+
+			tableColumnIndexes := helper.GetTableColumnIndex(string(rootPagePointers[table].CreateStatement), col_names)
+
+			filter_col_index := -1
+
+			if whereStatement != "" {
+				filter_col_index = helper.GetTableColumnIndex(string(rootPagePointers[table].CreateStatement), []string{whereExp[0]})[0]
+			}
+
+			var col_results [][]string
+
+			for _, row := range results {
+				// if there is no "WHERE" statement
+				// or if the row's column data doesnt match the filter
+				// we skip it
+				if filter_col_index != -1 && string(row.Columns[filter_col_index]) != whereExp[1] {
+					continue
+				}
+
+				var col_result []string
+
+				for _, index := range tableColumnIndexes {
+					if index == 0 {
+						col_result = append(col_result, strconv.Itoa(int(row.CellIdx)))
+						continue
+					}
+
+					col_result = append(col_result, string(row.Columns[index]))
+				}
+
+				col_results = append(col_results, col_result)
+			}
+
+			for _, col_result := range col_results {
+				result := strings.Join(col_result, "|")
+				fmt.Println(result)
 			}
 
 		}
